@@ -1,0 +1,24 @@
+# 敏感配置（包含Token，禁止上传）
+.env
+
+# 日志文件
+*.log
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 临时音频文件
+163music_*.mp3
+*.tmp
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# 本地部署专属（Render 版不需要）
+cloudflared.exe
+*.bat
+_*.py
