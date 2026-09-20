@@ -176,16 +176,25 @@ class NeteaseAPI:
     # ----------------------------------------------------------
     def get_song_url(self, song_ids: list, level: str = "standard") -> dict:
         """
-        获取歌曲播放直链
+        获取歌曲播放直链 - 使用简单API（跨地区稳定）
         level: standard / higher / exhigh / lossless / hires / jyeffect / sky / jymaster
         """
-        path = "/weapi/song/enhance/player/url/v1"
+        import logging
+        logger = logging.getLogger(__name__)
+        url = f"{_BASE_URL}/api/song/enhance/player/url"
         data = {
-            "ids": json.dumps(song_ids),
+            "ids": str(song_ids),
             "level": level,
             "encodeType": "mp3",
         }
-        return self._post(path, data)
+        try:
+            resp = self.session.post(url, data=data, timeout=15)
+            result = resp.json()
+            logger.info(f"获取播放地址 code={result.get('code')} ids={song_ids}")
+            return result
+        except Exception as e:
+            logger.error(f"获取播放地址异常: {e}")
+            return {"code": -1, "data": []}
 
     # ----------------------------------------------------------
     # 获取歌曲详情（名称、歌手、专辑、封面）
