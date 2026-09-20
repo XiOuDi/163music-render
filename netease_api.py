@@ -134,6 +134,8 @@ class NeteaseAPI:
         返回: {"songs": [...], "songCount": N}
         cookie被限流(code=405)时自动降级为无cookie搜索
         """
+        import logging
+        logger = logging.getLogger(__name__)
         path = "/weapi/search/get"
         data = {
             "s": keyword,
@@ -142,11 +144,25 @@ class NeteaseAPI:
             "offset": offset,
         }
         result = self._post(path, data)
+        # 调试日志
+        code = result.get("code")
+        songs_raw = result.get("result", {}).get("songs", [])
+        logger.info(f"搜索API返回 code={code} 结果数={len(songs_raw)} 关键词='{keyword}'")
+        if songs_raw:
+            for i, s in enumerate(songs_raw[:3]):
+                ar = "/".join(a.get("name", "") for a in s.get("ar", []))
+                logger.info(f"  结果{i+1}: {s.get('name')} - {ar}")
         # cookie被限流时降级为无cookie搜索
-        if result.get("code") == 405:
-            import logging
-            logging.getLogger(__name__).warning("搜索cookie被限流(405)，降级为无cookie搜索")
+        if code == 405:
+            logger.warning("搜索cookie被限流(405)，降级为无cookie搜索")
             result = self._post_nocookie(path, data)
+            nc_code = result.get("code")
+            nc_songs = result.get("result", {}).get("songs", [])
+            logger.info(f"无cookie搜索返回 code={nc_code} 结果数={len(nc_songs)}")
+            if nc_songs:
+                for i, s in enumerate(nc_songs[:3]):
+                    ar = "/".join(a.get("name", "") for a in s.get("ar", []))
+                    logger.info(f"  无cookie结果{i+1}: {s.get('name')} - {ar}")
         return result
 
     def _post_nocookie(self, path: str, data: dict) -> dict:
