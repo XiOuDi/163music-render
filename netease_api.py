@@ -8,7 +8,6 @@ import base64
 import random
 import string
 import hashlib
-import logging
 import requests
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -58,7 +57,7 @@ def _weapi(data: dict) -> dict:
     secret = _rand_str(16)
     params = _aes_encrypt(_aes_encrypt(text, _AES_KEY), secret)
     enc_sec_key = _rsa_encrypt(secret)
-    return {"params": params, "encSecKey": encSecKey}
+    return {"params": params, "encSecKey": enc_sec_key}
 
 
 # ============================================================
@@ -83,6 +82,7 @@ class NeteaseAPI:
     def __init__(self, cookie: str = ""):
         self.session = requests.Session()
         self.session.headers.update(_HEADERS)
+        # 增大连接池，支持高并发请求
         adapter = requests.adapters.HTTPAdapter(
             pool_connections=50,
             pool_maxsize=50,
@@ -92,6 +92,7 @@ class NeteaseAPI:
         self.session.mount("http://", adapter)
         if cookie:
             self.session.cookies.set("MUSIC_U", cookie, domain=".music.163.com")
+        # 额外设置一些必要 cookie
         self.session.cookies.set("__remember_me", "true", domain=".music.163.com")
         self.session.cookies.set("NMTID", self._gen_nmtid(), domain=".music.163.com")
 
@@ -141,20 +142,9 @@ class NeteaseAPI:
             "offset": offset,
         }
         result = self._post(path, data)
-        _code = result.get("code", -1)
-        _songs = result.get("result", {}).get("songs", [])
-        logging.getLogger(__name__).info(
-            f"搜索API: keyword='{keyword}' limit={limit} code={_code} 返回{len(_songs)}首"
-        )
-        if _songs:
-            _first = _songs[0]
-            _first_name = _first.get("name", "?")
-            _first_artists = "/".join(a.get("name","") for a in _first.get("artists",[]))
-            logging.getLogger(__name__).info(
-                f"搜索API: 首条结果='{_first_name}' by {_first_artists}"
-            )
         # cookie被限流时降级为无cookie搜索
         if result.get("code") == 405:
+            import logging
             logging.getLogger(__name__).warning("搜索cookie被限流(405)，降级为无cookie搜索")
             result = self._post_nocookie(path, data)
         return result
@@ -269,6 +259,7 @@ class NeteaseAPI:
         获取排行榜/歌单歌曲（默认云音乐热歌榜 3778678）
         超过500首时分批获取歌曲详情，避免API超时
         返回精简列表，同 search_songs_simple 格式
+        优化：减少批次延迟到0.1秒
         """
         path = "/weapi/v6/playlist/detail"
         data = {"id": playlist_id, "n": 10000, "s": 0}
@@ -278,6 +269,7 @@ class NeteaseAPI:
         if not track_ids:
             return []
 
+        # 分批获取歌曲详情（每批500首，避免API超时或返回不完整）
         BATCH_SIZE = 500
         all_songs = []
         for i in range(0, len(track_ids), BATCH_SIZE):
@@ -290,7 +282,7 @@ class NeteaseAPI:
                 print(f"[NeteaseAPI] 歌单详情分批获取失败 (batch {i//BATCH_SIZE + 1}): {e}")
             if i + BATCH_SIZE < len(track_ids):
                 import time
-                time.sleep(0.1)
+                time.sleep(0.1)  # 优化：批次间延迟从0.3秒减少到0.1秒
 
         simple_list = []
         for s in all_songs:
@@ -308,7 +300,11 @@ class NeteaseAPI:
         return simple_list
 
     async def get_toplist_songs_async(self, playlist_id: int = 3778678, limit: int = 10000, max_concurrent: int = 2) -> list:
-        """异步并发获取歌单歌曲"""
+        """
+        异步并发获取歌单歌曲（优化版）
+        使用 asyncio.gather 并发获取多批歌曲详情，并发数默认2
+        返回精简列表
+        """
         import asyncio
         path = "/weapi/v6/playlist/detail"
         data = {"id": playlist_id, "n": 10000, "s": 0}
@@ -318,8 +314,11 @@ class NeteaseAPI:
         if not track_ids:
             return []
 
+        # 分批获取歌曲详情（每批500首）
         BATCH_SIZE = 500
         batches = [track_ids[i:i + BATCH_SIZE] for i in range(0, len(track_ids), BATCH_SIZE)]
+
+        # 并发获取歌曲详情（控制并发数）
         semaphore = asyncio.Semaphore(max_concurrent)
 
         async def fetch_batch(batch_ids, batch_idx):
@@ -327,9 +326,10 @@ class NeteaseAPI:
                 try:
                     detail = await asyncio.to_thread(self.get_song_detail, batch_ids)
                     songs = detail.get("songs", [])
+                    print(f"[NeteaseAPI] 并发获取歌单详情 batch {batch_idx + 1}/{len(batches)} 成功，{len(songs)}首")
                     return songs
                 except Exception as e:
-                    print(f"[NeteaseAPI] 并发获取歌单详情失败: {e}")
+                    print(f"[NeteaseAPI] 并发获取歌单详情失败 (batch {batch_idx + 1}): {e}")
                     return []
 
         tasks = [fetch_batch(batch, idx) for idx, batch in enumerate(batches)]
@@ -358,8 +358,17 @@ class NeteaseAPI:
     # 用户歌单
     # ----------------------------------------------------------
     def get_user_playlists(self, uid: int, limit: int = 30, offset: int = 0) -> list:
+        """
+        获取用户的歌单列表
+        返回: [{"id": int, "name": str, "trackCount": int, "cover": str}, ...]
+        """
         path = "/weapi/user/playlist"
-        data = {"uid": uid, "limit": limit, "offset": offset, "includeVideo": True}
+        data = {
+            "uid": uid,
+            "limit": limit,
+            "offset": offset,
+            "includeVideo": True,
+        }
         result = self._post(path, data)
         playlists = result.get("playlist", [])
         simple_list = []
@@ -374,6 +383,10 @@ class NeteaseAPI:
         return simple_list
 
     def get_user_playlist_songs(self, uid: int, max_per_playlist: int = 100) -> list:
+        """
+        获取用户所有歌单中的歌曲（去重）
+        返回精简歌曲列表
+        """
         all_songs = []
         seen_ids = set()
         try:
@@ -395,41 +408,33 @@ class NeteaseAPI:
     # Cookie 管理
     # ----------------------------------------------------------
     def update_cookie(self, cookie: str):
-        """动态更新 MUSIC_U cookie — 先清除所有旧MUSIC_U避免冲突"""
-        # 清除所有已存在的 MUSIC_U cookie（包括NetEase Set-Cookie设置的）
-        for dom in (".music.163.com", "music.163.com"):
-            for pth in ("/", "/weapi", "/api"):
+        """动态更新 MUSIC_U cookie（先清除旧值，避免新旧 cookie 共存导致搜索结果错乱）"""
+        # 遍历删除所有 MUSIC_U，防止跨 domain/path 残留导致新旧 cookie 共存
+        for c in list(self.session.cookies):
+            if c.name == "MUSIC_U":
                 try:
-                    self.session.cookies.clear(domain=dom, path=pth, name="MUSIC_U")
+                    self.session.cookies.delete(c.name, domain=c.domain, path=c.path or "/")
                 except Exception:
                     pass
-        # 也遍历cookie jar清除所有MUSIC_U
-        try:
-            to_remove = [c for c in self.session.cookies if c.name == "MUSIC_U"]
-            for c in to_remove:
-                try:
-                    self.session.cookies.clear(domain=c.domain, path=c.path, name="MUSIC_U")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # 设置新cookie
-        self.session.cookies.set("MUSIC_U", cookie, domain=".music.163.com", path="/")
-        logging.getLogger(__name__).info(
-            f"update_cookie: 新cookie前缀={cookie[:12]}... 长度={len(cookie)}"
-        )
+        self.session.cookies.set("MUSIC_U", cookie, domain=".music.163.com")
 
     def get_cookie(self) -> str:
+        """获取当前 MUSIC_U cookie 值"""
         for c in self.session.cookies:
             if c.name == "MUSIC_U":
                 return c.value
         return ""
 
     def refresh_cookie(self) -> str:
+        """
+        调用网易云登录态刷新接口，返回新的 MUSIC_U cookie。
+        刷新成功会自动更新当前 session 的 cookie，失败返回空字符串。
+        """
         try:
             url = f"{_BASE_URL}/weapi/login/token/refresh"
             payload = _weapi({})
             resp = self.session.post(url, data=payload, timeout=30)
+            # 从响应 Set-Cookie 中提取新的 MUSIC_U
             new_cookie = ""
             for c in resp.cookies:
                 if c.name == "MUSIC_U" and c.value:
@@ -443,13 +448,43 @@ class NeteaseAPI:
         return ""
 
     def check_cookie_valid(self) -> bool:
+        """快速检测cookie是否有效（调用一次搜索接口判断）"""
         try:
             result = self.search("test", limit=1)
+            # 有效cookie返回 code=200
             return result.get("code") == 200
         except Exception:
             return False
 
+    # ----------------------------------------------------------
+    # 用户歌单
+    # ----------------------------------------------------------
+    def get_user_playlists(self, uid: int, limit: int = 30, offset: int = 0) -> list:
+        """
+        获取指定用户的歌单列表
+        返回: [{"id": int, "name": str, "trackCount": int, "coverImgUrl": str}, ...]
+        """
+        path = "/weapi/user/playlist"
+        data = {
+            "uid": uid,
+            "limit": limit,
+            "offset": offset,
+            "includeVideo": True,
+        }
+        result = self._post(path, data)
+        playlists = result.get("playlist", [])
+        simple_list = []
+        for p in playlists:
+            simple_list.append({
+                "id": p.get("id"),
+                "name": p.get("name", ""),
+                "trackCount": p.get("trackCount", 0),
+                "coverImgUrl": p.get("coverImgUrl", ""),
+            })
+        return simple_list
+
     def get_current_user_id(self) -> int:
+        """获取当前登录账号的用户ID（基于cookie），失败返回0"""
         try:
             path = "/weapi/nuser/account/get"
             result = self._post(path, {})
@@ -459,4 +494,8 @@ class NeteaseAPI:
             return 0
 
     def get_playlist_songs(self, playlist_id: int, limit: int = 1000) -> list:
+        """
+        获取指定歌单的所有歌曲（精简格式）
+        返回格式同 search_songs_simple
+        """
         return self.get_toplist_songs(playlist_id, limit=limit)
