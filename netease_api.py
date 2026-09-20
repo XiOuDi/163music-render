@@ -130,21 +130,23 @@ class NeteaseAPI:
     # ----------------------------------------------------------
     def search(self, keyword: str, limit: int = 30, offset: int = 0) -> dict:
         """
-        搜索歌曲
-        返回: {"songs": [...], "songCount": N}
-        cookie被限流(code=405)时自动降级为无cookie搜索
+        搜索歌曲 - 使用cloudsearch简单API（不依赖weapi加密，跨地区稳定）
         """
         import logging
         logger = logging.getLogger(__name__)
-        path = "/weapi/search/get"
+        url = f"{_BASE_URL}/api/cloudsearch/pc"
         data = {
             "s": keyword,
-            "type": 1,       # 1=单曲
-            "limit": limit,
-            "offset": offset,
+            "type": "1",
+            "limit": str(limit),
+            "offset": str(offset),
         }
-        result = self._post(path, data)
-        # 调试日志
+        try:
+            resp = self.session.post(url, data=data, timeout=15)
+            result = resp.json()
+        except Exception as e:
+            logger.error(f"搜索请求异常: {e}")
+            return {"code": -1, "result": {"songs": [], "songCount": 0}}
         code = result.get("code")
         songs_raw = result.get("result", {}).get("songs", [])
         logger.info(f"搜索API返回 code={code} 结果数={len(songs_raw)} 关键词='{keyword}'")
@@ -152,17 +154,6 @@ class NeteaseAPI:
             for i, s in enumerate(songs_raw[:3]):
                 ar = "/".join(a.get("name", "") for a in s.get("ar", []))
                 logger.info(f"  结果{i+1}: {s.get('name')} - {ar}")
-        # cookie被限流时降级为无cookie搜索
-        if code == 405:
-            logger.warning("搜索cookie被限流(405)，降级为无cookie搜索")
-            result = self._post_nocookie(path, data)
-            nc_code = result.get("code")
-            nc_songs = result.get("result", {}).get("songs", [])
-            logger.info(f"无cookie搜索返回 code={nc_code} 结果数={len(nc_songs)}")
-            if nc_songs:
-                for i, s in enumerate(nc_songs[:3]):
-                    ar = "/".join(a.get("name", "") for a in s.get("ar", []))
-                    logger.info(f"  无cookie结果{i+1}: {s.get('name')} - {ar}")
         return result
 
     def _post_nocookie(self, path: str, data: dict) -> dict:
