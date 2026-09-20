@@ -255,6 +255,25 @@ _processed_update_ids = set()  # 去重：防止Telegram重试导致重复处理
 # 内联请求开始时+1，内联结果返回后延迟10秒-1（给用户选择结果和发送音频的时间）
 inline_request_active = 0
 
+def _clear_search_cache():
+    """清除内联搜索缓存（Cookie更新后必须调用，否则5分钟内仍返回旧Cookie的搜索结果）"""
+    try:
+        keys = db.scan_keys("inline_search:*")
+        if keys:
+            for k in keys:
+                db._exec("DEL", k)
+            logger.info(f"已清除 {len(keys)} 个内联搜索缓存（Cookie已更新）")
+    except Exception as e:
+        logger.warning(f"清除搜索缓存失败: {e}")
+
+
+def _apply_cookie(new_cookie: str):
+    """统一更新Cookie：更新运行中的API实例 + 持久化到Upstash + 清除搜索缓存"""
+    api.update_cookie(new_cookie)
+    db.set_cookie(new_cookie)
+    _clear_search_cache()
+    logger.info(f"Cookie已生效 前缀={new_cookie[:12]}... 长度={len(new_cookie)}")
+
 # 缓存任务引用（内联请求时可 cancel() 真正立即中断）
 manual_cache_task = None   # 手动缓存任务（/cache 命令）
 auto_cache_task = None     # 闲时自动缓存任务
@@ -3234,8 +3253,7 @@ async def refresh_cookie_job(context: ContextTypes.DEFAULT_TYPE):
         old_cookie = api.get_cookie()
         new_cookie = await asyncio.to_thread(api.refresh_cookie)
         if new_cookie and new_cookie != old_cookie:
-            db.set_cookie(new_cookie)
-            api.update_cookie(new_cookie)
+            _apply_cookie(new_cookie)
             logger.info("Cookie 已自动刷新")
             await _notify_all_admins(context, "🔄 网易云 Cookie 已自动刷新成功")
         else:
@@ -3302,8 +3320,7 @@ async def cmd_setcookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not new_cookie:
         await update.message.reply_text("用法: /setcookie <cookie值>")
         return
-    api.update_cookie(new_cookie)
-    db.set_cookie(new_cookie)
+    _apply_cookie(new_cookie)
     await update.message.reply_text(f"✅ Cookie 已更新\n前20位: <code>{new_cookie[:20]}</code>...", parse_mode="HTML")
 
 
@@ -3318,7 +3335,7 @@ async def cmd_refreshcookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         old = api.get_cookie()
         new = await asyncio.to_thread(api.refresh_cookie)
         if new and new != old:
-            db.set_cookie(new)
+            _apply_cookie(new)
             await update.message.reply_text(f"✅ Cookie 已刷新\n前20位: <code>{new[:20]}</code>...", parse_mode="HTML")
         else:
             await update.message.reply_text("⚠️ 刷新未返回新 Cookie，可能已过期需要重新登录获取后用 /setcookie 设置")
@@ -3354,8 +3371,7 @@ async def handle_admin_document(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text(f"⚠️ 文件内容过短（长度{len(content)}），看起来不像有效的 cookie。")
             return
 
-        api.update_cookie(content)
-        db.set_cookie(content)
+        _apply_cookie(content)
         await update.message.reply_text(
             f"✅ 已从文件更新 Cookie\n"
             f"文件名: {filename}\n"
@@ -3376,8 +3392,7 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     # 识别为 cookie 的条件：长度 > 100 且为十六进制字符
     if len(text) > 100 and all(c in "0123456789abcdefABCDEF" for c in text):
-        api.update_cookie(text)
-        db.set_cookie(text)
+        _apply_cookie(text)
         await update.message.reply_text(
             f"✅ 已识别并设置 Cookie\n长度: {len(text)}\n前20位: <code>{text[:20]}</code>...",
             parse_mode="HTML",
@@ -4527,8 +4542,7 @@ def main():
                         old = api.get_cookie()
                         new = await asyncio.to_thread(api.refresh_cookie)
                         if new and new != old:
-                            db.set_cookie(new)
-                            api.update_cookie(new)
+                            _apply_cookie(new)
                             logger.info("Cookie 已自动刷新")
                             await _notify_all_admins(application, "🔄 网易云 Cookie 已自动刷新成功")
                     except Exception as e:
