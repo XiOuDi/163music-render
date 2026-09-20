@@ -130,30 +130,23 @@ class NeteaseAPI:
     # ----------------------------------------------------------
     def search(self, keyword: str, limit: int = 30, offset: int = 0) -> dict:
         """
-        搜索歌曲 - 使用cloudsearch简单API（不依赖weapi加密，跨地区稳定）
+        搜索歌曲
+        返回: {"songs": [...], "songCount": N}
+        cookie被限流(code=405)时自动降级为无cookie搜索
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        url = f"{_BASE_URL}/api/cloudsearch/pc"
+        path = "/weapi/search/get"
         data = {
             "s": keyword,
-            "type": "1",
-            "limit": str(limit),
-            "offset": str(offset),
+            "type": 1,       # 1=单曲
+            "limit": limit,
+            "offset": offset,
         }
-        try:
-            resp = self.session.post(url, data=data, timeout=15)
-            result = resp.json()
-        except Exception as e:
-            logger.error(f"搜索请求异常: {e}")
-            return {"code": -1, "result": {"songs": [], "songCount": 0}}
-        code = result.get("code")
-        songs_raw = result.get("result", {}).get("songs", [])
-        logger.info(f"搜索API返回 code={code} 结果数={len(songs_raw)} 关键词='{keyword}'")
-        if songs_raw:
-            for i, s in enumerate(songs_raw[:3]):
-                ar = "/".join(a.get("name", "") for a in s.get("ar", []))
-                logger.info(f"  结果{i+1}: {s.get('name')} - {ar}")
+        result = self._post(path, data)
+        # cookie被限流时降级为无cookie搜索
+        if result.get("code") == 405:
+            import logging
+            logging.getLogger(__name__).warning("搜索cookie被限流(405)，降级为无cookie搜索")
+            result = self._post_nocookie(path, data)
         return result
 
     def _post_nocookie(self, path: str, data: dict) -> dict:
@@ -415,14 +408,7 @@ class NeteaseAPI:
     # Cookie 管理
     # ----------------------------------------------------------
     def update_cookie(self, cookie: str):
-        """动态更新 MUSIC_U cookie（先清除旧值，避免新旧 cookie 共存导致搜索结果错乱）"""
-        # 遍历删除所有 MUSIC_U，防止跨 domain/path 残留导致新旧 cookie 共存
-        for c in list(self.session.cookies):
-            if c.name == "MUSIC_U":
-                try:
-                    self.session.cookies.delete(c.name, domain=c.domain, path=c.path or "/")
-                except Exception:
-                    pass
+        """动态更新 MUSIC_U cookie"""
         self.session.cookies.set("MUSIC_U", cookie, domain=".music.163.com")
 
     def get_cookie(self) -> str:
