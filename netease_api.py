@@ -236,21 +236,28 @@ class NeteaseAPI:
         """
         搜索歌曲，返回精简列表：
         [{"id": int, "name": str, "artist": str, "album": str, "cover": str, "duration": int}, ...]
+        兼容 weapi(artists/album/duration) 和 cloudsearch(ar/al/dt) 两种字段
         """
         result = self.search(keyword, limit=limit)
         songs = result.get("result", {}).get("songs", [])
         simple_list = []
         for s in songs:
-            artists = "/".join(a.get("name", "") for a in s.get("artists", []))
-            album = s.get("album", {}).get("name", "")
-            cover = s.get("album", {}).get("picUrl", "")
+            # 兼容两种字段：weapi用artists，cloudsearch用ar
+            ar_list = s.get("artists") or s.get("ar") or []
+            artists = "/".join(a.get("name", "") for a in ar_list)
+            # 兼容两种字段：weapi用album，cloudsearch用al
+            al_obj = s.get("album") or s.get("al") or {}
+            album = al_obj.get("name", "") if isinstance(al_obj, dict) else ""
+            cover = al_obj.get("picUrl", "") if isinstance(al_obj, dict) else ""
+            # 兼容两种字段：weapi用duration，cloudsearch用dt
+            duration = s.get("duration") or s.get("dt") or 0
             simple_list.append({
                 "id": s.get("id"),
                 "name": s.get("name", ""),
                 "artist": artists,
                 "album": album,
                 "cover": cover,
-                "duration": s.get("duration", 0),  # 毫秒
+                "duration": duration,
             })
         return simple_list
 
