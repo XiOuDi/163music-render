@@ -1,4 +1,4 @@
-"""
+﻿"""
 Telegram 网易云音乐机器人
 功能：
   - /start  开始使用
@@ -644,7 +644,7 @@ def _tag_mp3(audio_bytes: io.BytesIO, song: dict, cover_url: str = None) -> io.B
     """给MP3写入ID3标签（标题、艺术家、专辑、封面），确保Telegram显示正确信息"""
     try:
         from mutagen.mp3 import MP3
-        from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC
+        from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC, USLT
         # 兼容两种字段格式：搜索结果(artist/album字符串) 和 歌曲详情(ar数组/al对象)
         name = song.get("name", "未知歌曲")
         if "artist" in song:
@@ -691,6 +691,22 @@ def _tag_mp3(audio_bytes: io.BytesIO, song: dict, cover_url: str = None) -> io.B
                     logger.info(f"ID3封面嵌入成功: {name} ({len(_cover_resp.content)//1024}KB)")
             except Exception as cover_err:
                 logger.warning(f"ID3封面嵌入失败 {name}: {cover_err}")
+        # 嵌入歌词（USLT）
+        song_id = song.get("id")
+        if song_id:
+            try:
+                lyric_result = api.get_lyric(song_id)
+                lrc_text = lyric_result.get("lrc", {}).get("lyric", "")
+                if lrc_text and len(lrc_text) > 10:
+                    audio.tags.add(USLT(
+                        encoding=3,
+                        lang="chi",
+                        desc="",
+                        text=lrc_text
+                    ))
+                    logger.info(f"ID3歌词嵌入成功: {name} ({len(lrc_text)}字符)")
+            except Exception as lyric_err:
+                logger.warning(f"ID3歌词嵌入失败 {name}: {lyric_err}")
         audio_bytes.seek(0)
         audio.save(audio_bytes)
         audio_bytes.seek(0)
