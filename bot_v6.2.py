@@ -5215,6 +5215,27 @@ def main():
 
             asyncio.create_task(_autocache_song_worker())
 
+            # 每天凌晨3:30自动重启Render（进程退出后Render自动拉起，释放内存）
+            async def _daily_auto_restart():
+                import datetime as _dt
+                while True:
+                    now = _dt.datetime.now()
+                    target = now.replace(hour=3, minute=30, second=0, microsecond=0)
+                    if now >= target:
+                        target += _dt.timedelta(days=1)
+                    wait_sec = (target - now).total_seconds()
+                    logger.info(f"⏰ 自动重启计划: 将于 {target.strftime('%Y-%m-%d %H:%M:%S')} 重启（{wait_sec/3600:.1f}小时后）")
+                    await asyncio.sleep(wait_sec)
+                    logger.info("🔄 每日自动重启触发，退出进程（Render将自动拉起）")
+                    try:
+                        await application.stop()
+                        await application.shutdown()
+                    except Exception:
+                        pass
+                    os._exit(0)
+
+            asyncio.create_task(_daily_auto_restart())
+
             try:
                 while True:
                     await asyncio.sleep(3600)
