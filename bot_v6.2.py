@@ -2491,6 +2491,8 @@ async def handle_inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE
     if await asyncio.to_thread(_is_banned, user.id):
         return
 
+    _register_user(user.id)
+
     # 内联请求开始，增加活跃计数（暂停歌单缓存和闲时缓存）
     inline_request_active += 1
     logger.info(f"内联请求 活跃计数+1 = {inline_request_active}")
