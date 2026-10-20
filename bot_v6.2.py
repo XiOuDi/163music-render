@@ -3590,6 +3590,67 @@ async def cmd_clearfilecache(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(f"🗑️ 已清空 {count} 个失效file_id缓存，下次播放将重新下载并上传。")
 
 
+async def cmd_recacheall(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """管理员：批量重新缓存所有已缓存歌曲（bot token变更后恢复file_id）"""
+    user = update.effective_user
+    if not _is_admin(user.id):
+        await update.message.reply_text("⛔ 权限不足。")
+        return
+
+    song_ids = await asyncio.to_thread(db.get_all_cached_song_ids)
+    if not song_ids:
+        await update.message.reply_text("📭 没有已缓存的歌曲需要重新缓存。")
+        return
+
+    total = len(song_ids)
+    status = await update.message.reply_text(f"🔄 开始重新缓存 {total} 首歌曲...")
+    logger.info(f"批量重新缓存：共{total}首")
+
+    success = 0
+    failed = 0
+    for idx, sid in enumerate(song_ids, 1):
+        try:
+            # 获取歌曲详情
+            detail = await asyncio.to_thread(api.get_song_detail, [sid])
+            songs_detail = detail.get("songs", [])
+            if not songs_detail:
+                failed += 1
+                continue
+            raw = songs_detail[0]
+            song = {
+                "id": raw.get("id", sid),
+                "name": raw.get("name", "未知"),
+                "artist": "/".join([a.get("name", "") for a in raw.get("ar", []) if a.get("name")]) or "未知",
+                "album": (raw.get("al") or {}).get("name", ""),
+                "cover": (raw.get("al") or {}).get("picUrl", ""),
+                "duration": raw.get("dt", 0),
+            }
+            # 发送到管理员获取新file_id
+            fid = await _cache_song_to_admin(context, song)
+            if fid:
+                db.set_file_id(sid, fid)
+                success += 1
+            else:
+                failed += 1
+            # 每50首更新一次状态
+            if idx % 50 == 0:
+                try:
+                    await status.edit_text(f"🔄 重新缓存进度：{idx}/{total}\n✅ 成功{success} ❌ 失败{failed}")
+                except Exception:
+                    pass
+            await asyncio.sleep(1)
+        except Exception as e:
+            logger.warning(f"重新缓存失败 song_id={sid}: {e}")
+            failed += 1
+            await asyncio.sleep(1)
+
+    try:
+        await status.edit_text(f"✅ 重新缓存完成\n共{total}首\n✅ 成功{success} ❌ 失败{failed}")
+    except Exception:
+        pass
+    logger.info(f"批量重新缓存完成：成功{success} 失败{failed}")
+
+
 async def cmd_cacheplaylist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """管理员：缓存指定歌单的全部歌曲（低优先级）"""
     user = update.effective_user
@@ -4443,6 +4504,7 @@ def main():
     application.add_handler(CommandHandler("togglesongcache", cmd_togglesongcache))
     application.add_handler(CommandHandler("cachestatus", cmd_cachestatus))
     application.add_handler(CommandHandler("clearfilecache", cmd_clearfilecache))
+    application.add_handler(CommandHandler("recacheall", cmd_recacheall))
     application.add_handler(CommandHandler("cacheplaylist", cmd_cacheplaylist))
     application.add_handler(CommandHandler("cachesame", cmd_cachesame))
     application.add_handler(CommandHandler("cachesameall", cmd_cachesameall))
