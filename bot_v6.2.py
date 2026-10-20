@@ -3606,17 +3606,20 @@ async def cmd_recacheall(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     total = len(song_ids)
     status = await update.message.reply_text(f"🔄 开始重新缓存 {total} 首歌曲...")
-    logger.info(f"批量重新缓存：共{total}首")
+    logger.info(f"====== 批量重新缓存开始：共{total}首 ======")
 
     success = 0
     failed = 0
     for idx, sid in enumerate(song_ids, 1):
         try:
+            logger.info(f"[recache {idx}/{total}] 处理 song_id={sid}")
             # 获取歌曲详情
             detail = await asyncio.to_thread(api.get_song_detail, [sid])
             songs_detail = detail.get("songs", [])
             if not songs_detail:
+                logger.warning(f"[recache {idx}/{total}] song_id={sid} 获取详情失败，无返回")
                 failed += 1
+                await asyncio.sleep(1)
                 continue
             raw = songs_detail[0]
             song = {
@@ -3627,22 +3630,25 @@ async def cmd_recacheall(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "cover": (raw.get("al") or {}).get("picUrl", ""),
                 "duration": raw.get("dt", 0),
             }
+            logger.info(f"[recache {idx}/{total}] 🎵 {song['name']} - {song['artist']} (song_id={sid})")
             # 发送到管理员获取新file_id
             fid = await _cache_song_to_admin(context, song)
             if fid:
                 db.set_file_id(sid, fid)
                 success += 1
+                logger.info(f"[recache {idx}/{total}] ✅ 成功: {song['name']} (新file_id={fid[:20]}...)")
             else:
                 failed += 1
-            # 每50首更新一次状态
-            if idx % 50 == 0:
+                logger.warning(f"[recache {idx}/{total}] ❌ 失败: {song['name']} (未获取到file_id)")
+            # 每20首更新一次状态
+            if idx % 20 == 0:
                 try:
                     await status.edit_text(f"🔄 重新缓存进度：{idx}/{total}\n✅ 成功{success} ❌ 失败{failed}")
                 except Exception:
                     pass
             await asyncio.sleep(1)
         except Exception as e:
-            logger.warning(f"重新缓存失败 song_id={sid}: {e}")
+            logger.error(f"[recache {idx}/{total}] ❌ 异常 song_id={sid}: {e}")
             failed += 1
             await asyncio.sleep(1)
 
@@ -3650,7 +3656,7 @@ async def cmd_recacheall(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status.edit_text(f"✅ 重新缓存完成\n共{total}首\n✅ 成功{success} ❌ 失败{failed}")
     except Exception:
         pass
-    logger.info(f"批量重新缓存完成：成功{success} 失败{failed}")
+    logger.info(f"====== 批量重新缓存完成：共{total}首，成功{success}，失败{failed} ======")
 
 
 async def cmd_cacheplaylist(update: Update, context: ContextTypes.DEFAULT_TYPE):
