@@ -3580,6 +3580,16 @@ async def cmd_cachestatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_clearfilecache(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """管理员：一键清空所有file_id缓存（bot token变更后使用）"""
+    user = update.effective_user
+    if not _is_admin(user.id):
+        await update.message.reply_text("⛔ 权限不足。")
+        return
+    count = await asyncio.to_thread(db.clear_all_file_ids)
+    await update.message.reply_text(f"🗑️ 已清空 {count} 个失效file_id缓存，下次播放将重新下载并上传。")
+
+
 async def cmd_cacheplaylist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """管理员：缓存指定歌单的全部歌曲（低优先级）"""
     user = update.effective_user
@@ -4432,6 +4442,7 @@ def main():
     application.add_handler(CommandHandler("autocache", cmd_autocache))
     application.add_handler(CommandHandler("togglesongcache", cmd_togglesongcache))
     application.add_handler(CommandHandler("cachestatus", cmd_cachestatus))
+    application.add_handler(CommandHandler("clearfilecache", cmd_clearfilecache))
     application.add_handler(CommandHandler("cacheplaylist", cmd_cacheplaylist))
     application.add_handler(CommandHandler("cachesame", cmd_cachesame))
     application.add_handler(CommandHandler("cachesameall", cmd_cachesameall))
