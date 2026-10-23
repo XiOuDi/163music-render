@@ -1988,6 +1988,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def _maybe_send_lrc(update, context, song_id, song, reply_msg_id):
+    """私聊播放后自动发送LRC歌词文件"""
+    try:
+        chat = update.effective_chat
+        if not chat or chat.type != "private":
+            return
+        lrc_result = await asyncio.to_thread(api.get_lyric, song_id)
+        lrc_text = lrc_result.get("lrc", {}).get("lyric", "")
+        if not lrc_text:
+            return
+        import tempfile as _tf
+        safe_name = re.sub(r'[\\/:*?"<>|]', '_', f"{song['name']} - {song['artist']}")
+        lrc_fd, lrc_path = _tf.mkstemp(suffix=".lrc", prefix="lyric_")
+        try:
+            with os.fdopen(lrc_fd, "w", encoding="utf-8") as f:
+                f.write(lrc_text)
+            with open(lrc_path, "rb") as lrc_file:
+                await context.bot.send_document(
+                    chat_id=chat.id,
+                    document=lrc_file,
+                    filename=f"{safe_name}.lrc",
+                    reply_to_message_id=reply_msg_id,
+                )
+            logger.info(f"播放歌曲 📄 LRC文件已发送: {song['name']}")
+        finally:
+            if os.path.exists(lrc_path):
+                os.remove(lrc_path)
+    except Exception as e:
+        logger.warning(f"自动发送LRC失败: {e}")
+
+
 async def _play_song(update: Update, context: ContextTypes.DEFAULT_TYPE, song_id: int, edit: bool = False, thread_id_override=None):
     """获取歌曲信息，下载音频并发送（私聊带歌词按钮，群组带在bot中播放按钮，支持话题群组）"""
     user = update.effective_user
@@ -2127,6 +2158,8 @@ async def _play_song(update: Update, context: ContextTypes.DEFAULT_TYPE, song_id
                         logger.debug(f"删除搜索结果消息失败（可能已被删除）: {del_e}")
                 active_search_plays.discard(user.id)
                 logger.info(f"播放歌曲 ✅ 发送成功: {song['name']} - {song['artist']}")
+                # 私聊播放时自动发送LRC歌词文件
+                await _maybe_send_lrc(update, context, song_id, song, msg.message_id if msg else None)
                 # 用户播放后自动添加到缓存队列（后台缓存前20个版本，不限歌手）
                 try:
                     _loop = asyncio.get_event_loop()
@@ -2195,30 +2228,7 @@ async def _play_song(update: Update, context: ContextTypes.DEFAULT_TYPE, song_id
                 )
 
             # 私聊播放时自动发送LRC歌词文件
-            if update.effective_chat and update.effective_chat.type == "private":
-                try:
-                    lrc_result = await asyncio.to_thread(api.get_lyric, song_id)
-                    lrc_text = lrc_result.get("lrc", {}).get("lyric", "")
-                    if lrc_text:
-                        import tempfile as _tf
-                        safe_name = re.sub(r'[\\/:*?"<>|]', '_', f"{song['name']} - {song['artist']}")
-                        lrc_fd, lrc_path = _tf.mkstemp(suffix=".lrc", prefix="lyric_")
-                        try:
-                            with os.fdopen(lrc_fd, "w", encoding="utf-8") as f:
-                                f.write(lrc_text)
-                            with open(lrc_path, "rb") as lrc_file:
-                                await context.bot.send_document(
-                                    chat_id=chat_id,
-                                    document=lrc_file,
-                                    filename=f"{safe_name}.lrc",
-                                    reply_to_message_id=msg.message_id if msg else None,
-                                )
-                            logger.info(f"播放歌曲 📄 LRC文件已发送: {song['name']}")
-                        finally:
-                            if os.path.exists(lrc_path):
-                                os.remove(lrc_path)
-                except Exception as lrc_e:
-                    logger.debug(f"自动发送LRC失败: {lrc_e}")
+            await _maybe_send_lrc(update, context, song_id, song, msg.message_id if msg else None)
 
             if edit:
                 try:
