@@ -998,6 +998,9 @@ async def _render_search_page(update: Update, context: ContextTypes.DEFAULT_TYPE
         keyboard.append([
             InlineKeyboardButton(label, callback_data=f"play:{song['id']}{_tid_suffix}")
         ])
+        keyboard.append([
+            InlineKeyboardButton("📄 下载LRC歌词", callback_data=f"lrcfile:{song['id']}{_tid_suffix}")
+        ])
 
     # 分页导航按钮
     nav = []
@@ -1878,6 +1881,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("lyric:"):
         song_id = int(data.split(":", 1)[1])
         await _send_lyrics(update, context, song_id)
+    elif data.startswith("lrcfile:"):
+        parts = data.split(":")
+        song_id = int(parts[1])
+        thread_override = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+        await _send_lrc_file(update, context, song_id, thread_override)
     elif data.startswith("plist:"):
         # 歌单列表分页
         parts = data.split(":")
@@ -2413,6 +2421,72 @@ async def _cache_song_to_admin(context, song, url=None):
     except Exception as e:
         logger.warning(f"内联缓存失败 {song.get('name')}: {e}")
         return None
+
+
+async def _send_lrc_file(update: Update, context: ContextTypes.DEFAULT_TYPE, song_id: int, thread_id_override=None):
+    """获取LRC歌词并作为文件发送（保留时间戳）"""
+    query = update.callback_query
+    await query.answer("正在获取LRC文件...")
+
+    message_thread_id = thread_id_override or getattr(query.message, 'message_thread_id', None)
+
+    try:
+        result = await asyncio.to_thread(api.get_lyric, song_id)
+        lrc = result.get("lrc", {}).get("lyric", "")
+        if not lrc:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                message_thread_id=message_thread_id,
+                text="😢 这首歌没有歌词。",
+                reply_to_message_id=query.message.message_id,
+            )
+            return
+
+        # 获取歌曲名作为文件名
+        detail = await asyncio.to_thread(api.get_song_detail, [song_id])
+        songs_detail = detail.get("songs", [])
+        if songs_detail:
+            raw = songs_detail[0]
+            song_name = raw.get("name", "未知")
+            artist = "/".join([a.get("name", "") for a in raw.get("ar", []) if a.get("name")]) or "未知"
+        else:
+            song_name = "未知"
+            artist = "未知"
+
+        # 写入临时LRC文件
+        import tempfile
+        safe_name = re.sub(r'[\\/:*?"<>|]', '_', f"{song_name} - {artist}")
+        lrc_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".lrc", delete=False, encoding="utf-8") as f:
+                f.write(lrc)
+                lrc_path = f.name
+            await context.bot.send_document(
+                chat_id=query.message.chat_id,
+                message_thread_id=message_thread_id,
+                document=open(lrc_path, "rb"),
+                filename=f"{safe_name}.lrc",
+                caption=f"📄 {song_name} - {artist}",
+                reply_to_message_id=query.message.message_id,
+            )
+            logger.info(f"✅ LRC文件已发送: {song_name} - {artist}")
+        finally:
+            if lrc_path:
+                try:
+                    os.unlink(lrc_path)
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.error(f"发送LRC文件失败 song_id={song_id}: {e}")
+        try:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                message_thread_id=message_thread_id,
+                text=f"❌ 获取LRC文件失败: {e}",
+                reply_to_message_id=query.message.message_id,
+            )
+        except Exception:
+            pass
 
 
 async def _send_lyrics(update: Update, context: ContextTypes.DEFAULT_TYPE, song_id: int):
