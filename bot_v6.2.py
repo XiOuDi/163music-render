@@ -598,7 +598,7 @@ async def _send_audio_with_fallback(context, chat_id, song, quality="standard", 
                     chat_id=chat_id,
                     message_thread_id=message_thread_id,
                     audio=audio_file,
-                    filename=f"{song['name']}.mp3",
+                    filename=f"{song['name']} - {song['artist']}.mp3",
                     title=song["name"],
                     performer=song["artist"],
                     caption=caption,
@@ -997,9 +997,6 @@ async def _render_search_page(update: Update, context: ContextTypes.DEFAULT_TYPE
         label = f"{idx}. {song['name']} - {song['artist']} ({_fmt_duration(song['duration'])})"
         keyboard.append([
             InlineKeyboardButton(label, callback_data=f"play:{song['id']}{_tid_suffix}")
-        ])
-        keyboard.append([
-            InlineKeyboardButton("📄 下载LRC歌词", callback_data=f"lrcfile:{song['id']}{_tid_suffix}")
         ])
 
     # 分页导航按钮
@@ -1428,7 +1425,7 @@ async def _play_playlist_all(update: Update, context, playlist_id: int):
                             msg = await context.bot.send_audio(
                                 chat_id=chat_id,
                                 audio=audio_file,
-                                filename=f"{song['name']}.mp3",
+                                filename=f"{song['name']} - {song['artist']}.mp3",
                                 title=song["name"],
                                 performer=song["artist"],
                                 caption=caption,
@@ -2187,7 +2184,7 @@ async def _play_song(update: Update, context: ContextTypes.DEFAULT_TYPE, song_id
                     chat_id=chat_id,
                     message_thread_id=message_thread_id,
                     audio=audio_file,
-                    filename=f"{song['name']}.mp3",
+                    filename=f"{song['name']} - {song['artist']}.mp3",
                     title=song["name"],
                     performer=song["artist"],
                     caption=caption,
@@ -2196,6 +2193,32 @@ async def _play_song(update: Update, context: ContextTypes.DEFAULT_TYPE, song_id
                     duration=song["duration"] // 1000 if song.get("duration") else None,
                     reply_markup=reply_markup,
                 )
+
+            # 私聊播放时自动发送LRC歌词文件
+            if update.effective_chat and update.effective_chat.type == "private":
+                try:
+                    lrc_result = await asyncio.to_thread(api.get_lyric, song_id)
+                    lrc_text = lrc_result.get("lrc", {}).get("lyric", "")
+                    if lrc_text:
+                        import tempfile as _tf
+                        safe_name = re.sub(r'[\\/:*?"<>|]', '_', f"{song['name']} - {song['artist']}")
+                        lrc_fd, lrc_path = _tf.mkstemp(suffix=".lrc", prefix="lyric_")
+                        try:
+                            with os.fdopen(lrc_fd, "w", encoding="utf-8") as f:
+                                f.write(lrc_text)
+                            with open(lrc_path, "rb") as lrc_file:
+                                await context.bot.send_document(
+                                    chat_id=chat_id,
+                                    document=lrc_file,
+                                    filename=f"{safe_name}.lrc",
+                                    reply_to_message_id=msg.message_id if msg else None,
+                                )
+                            logger.info(f"播放歌曲 📄 LRC文件已发送: {song['name']}")
+                        finally:
+                            if os.path.exists(lrc_path):
+                                os.remove(lrc_path)
+                except Exception as lrc_e:
+                    logger.debug(f"自动发送LRC失败: {lrc_e}")
 
             if edit:
                 try:
@@ -2369,7 +2392,7 @@ async def _send_song_to_private(context, user_id: int, song_id: int):
             return
         audio_bytes = io.BytesIO(resp.content)
         audio_bytes = await asyncio.to_thread(_tag_mp3, audio_bytes, song)
-        filename = f"{song['name']} - {config.MUSIC_QUALITY}.mp3"
+        filename = f"{song['name']} - {song['artist']}.mp3"
         msg = await context.bot.send_audio(
             chat_id=user_id,
             audio=audio_bytes,
@@ -3539,7 +3562,7 @@ async def cmd_cachetop(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         continue
                     audio_bytes = io.BytesIO(resp.content)
                     audio_bytes = _tag_mp3(audio_bytes, song)
-                    filename = f"{song['name']} - {config.MUSIC_QUALITY}.mp3"
+                    filename = f"{song['name']} - {song['artist']}.mp3"
                     # 发送给缓存聊天
                     msg = await context.bot.send_audio(
                         chat_id=8684066933,
