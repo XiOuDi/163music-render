@@ -882,6 +882,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 <b>帮助文档</b>\n\n"
         "🎵 <b>搜索与播放</b>\n"
         "• /play 关键词 — 搜索歌曲\n"
+        "• /chart — 查看热歌排行榜\n"
         "• /playlist 歌单ID/链接 — 播放网易云歌单（仅限私聊）\n"
         "• 内联模式：@XiOuDi163_bot 关键词 — 在任意对话中搜索分享\n\n"
         "🔧 <b>其他</b>\n"
@@ -895,6 +896,65 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /unban 用户ID — 解封用户"
     )
     await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """查看热歌排行榜，每页10首，可点击播放"""
+    user = update.effective_user
+    if _is_banned(user.id):
+        await update.message.reply_text("⛔ 你已被管理员封禁。")
+        return
+
+    status = await update.message.reply_text("🔥 正在获取热歌榜...")
+    try:
+        songs = await asyncio.to_thread(api.get_toplist_songs, 3778678, 100)
+    except Exception as e:
+        await status.edit_text(f"❌ 获取热歌榜失败: {e}")
+        return
+
+    if not songs:
+        await status.edit_text("❌ 未获取到热歌榜数据。")
+        return
+
+    context.user_data["chart_songs"] = songs
+    await _render_chart_page(update, context, 0, status)
+
+
+async def _render_chart_page(update, context, page, status_msg=None):
+    """渲染热歌榜某一页"""
+    songs = context.user_data.get("chart_songs", [])
+    page_size = 10
+    total = len(songs)
+    total_pages = (total + page_size - 1) // page_size
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * page_size
+    end = min(start + page_size, total)
+    page_songs = songs[start:end]
+
+    keyboard = []
+    for i, song in enumerate(page_songs):
+        idx = start + i + 1
+        label = f"{idx}. {song['name']} - {song['artist']}"
+        keyboard.append([
+            InlineKeyboardButton(label, callback_data=f"chartplay:{song['id']}")
+        ])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ 上一页", callback_data=f"chartpage:{page-1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("下一页 ➡️", callback_data=f"chartpage:{page+1}"))
+    if nav:
+        keyboard.append(nav)
+
+    text = f"🔥 <b>热歌榜 Top {total}</b>（第 {page+1}/{total_pages} 页，点击播放）："
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if status_msg:
+        await status_msg.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+    else:
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 
 async def cmd_play(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1875,6 +1935,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("searchpage:"):
         page = int(data.split(":", 1)[1])
         await _render_search_page(update, context, page)
+    elif data.startswith("chartpage:"):
+        page = int(data.split(":", 1)[1])
+        await _render_chart_page(update, context, page)
+    elif data.startswith("chartplay:"):
+        song_id = int(data.split(":", 1)[1])
+        await _play_song(update, context, song_id, edit=True)
     elif data.startswith("lyric:"):
         song_id = int(data.split(":", 1)[1])
         await _send_lyrics(update, context, song_id)
@@ -4593,6 +4659,7 @@ def main():
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("help", cmd_help))
     application.add_handler(CommandHandler("play", cmd_play))
+    application.add_handler(CommandHandler("chart", cmd_chart))
     application.add_handler(CommandHandler("music", cmd_music))
     application.add_handler(CommandHandler("playlist", cmd_playlist))
     application.add_handler(CommandHandler("admin", cmd_admin))
