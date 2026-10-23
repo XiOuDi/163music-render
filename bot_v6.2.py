@@ -814,7 +814,7 @@ async def audio_proxy_handler(request):
             body=tagged.read(),
             content_type="audio/mpeg",
             headers={
-                "Content-Disposition": f'inline; filename="{quote(name)}.mp3"',
+                "Content-Disposition": f'inline; filename="{quote(f"{name} - {artist}")}.mp3"',
                 "Cache-Control": "public, max-age=3600",
             },
         )
@@ -1828,7 +1828,7 @@ async def _resume_playlist_play(application, user_id: int, playlist_id: int, son
                         msg = await bot.send_audio(
                             chat_id=chat_id,
                             audio=audio_file,
-                            filename=f"{song['name']}.mp3",
+                            filename=f"{song['name']} - {song['artist']}.mp3",
                             title=song["name"],
                             performer=song["artist"],
                             caption=caption,
